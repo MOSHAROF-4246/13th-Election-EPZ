@@ -10,26 +10,24 @@ import {
   PhoneIcon, 
   ChatBubbleLeftRightIcon,
   HomeIcon, 
-  ArrowLeftIcon,
-  LockClosedIcon,
-  Bars3Icon,
-  XMarkIcon,
-  PencilSquareIcon,
-  TrashIcon,
-  PlusIcon,
-  Cog6ToothIcon,
-  ArrowDownTrayIcon,
-  ArrowUpTrayIcon,
-  ShieldCheckIcon,
-  MegaphoneIcon,
-  BuildingOfficeIcon,
-  InboxStackIcon,
-  KeyIcon,
-  ExclamationCircleIcon,
-  CheckCircleIcon,
-  MapIcon,
-  ArrowRightOnRectangleIcon,
-  CloudArrowUpIcon
+  ArrowLeftIcon, 
+  LockClosedIcon, 
+  Bars3Icon, 
+  XMarkIcon, 
+  PencilSquareIcon, 
+  TrashIcon, 
+  PlusIcon, 
+  Cog6ToothIcon, 
+  ShieldCheckIcon, 
+  MegaphoneIcon, 
+  BuildingOfficeIcon, 
+  InboxStackIcon, 
+  KeyIcon, 
+  ExclamationCircleIcon, 
+  CheckCircleIcon, 
+  MapIcon, 
+  ArrowRightOnRectangleIcon, 
+  CloudArrowUpIcon 
 } from '@heroicons/react/24/solid';
 
 // Helper to convert English digits to Bengali digits
@@ -39,7 +37,6 @@ const toBengaliDigits = (num: string | number) => {
 };
 
 // Centralized Sync Configuration
-// Using a reliable JSON storage API for persistent centralized data
 const API_BASE = "https://jsonblob.com/api/jsonBlob/1344265780516626432"; 
 
 interface CustomModalProps {
@@ -55,22 +52,28 @@ interface CustomModalProps {
 }
 
 const App: React.FC = () => {
-  // Session State (Local Only)
-  const [isLoggedIn, setIsLoggedIn] = useState(() => localStorage.getItem('app_is_logged_in') === 'true');
-  const [isAdminLoggedIn, setIsAdminLoggedIn] = useState(() => localStorage.getItem('app_is_admin_logged_in') === 'true');
-
   // Sync State
   const [lastUpdated, setLastUpdated] = useState<number>(0);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [syncError, setSyncError] = useState<string | null>(null);
+  const [hasInitialSync, setHasInitialSync] = useState<boolean>(false);
 
   // Core App Data State
-  const [centers, setCenters] = useState<VotingCenter[]>(initialCenters);
-  const [emergencyContact, setEmergencyContact] = useState<EmergencyContact>({ name: 'ক্যাম্প কমান্ডার', mobile: '01712345678' });
-  const [userPassword, setUserPassword] = useState('EPZArmy');
-  const [adminPassword, setAdminPassword] = useState('admin123');
+  const [centers, setCenters] = useState<VotingCenter[]>(() => {
+    const saved = localStorage.getItem('army_centers_cache');
+    return saved ? JSON.parse(saved) : initialCenters;
+  });
+  const [emergencyContact, setEmergencyContact] = useState<EmergencyContact>(() => {
+    const saved = localStorage.getItem('army_emergency_cache');
+    return saved ? JSON.parse(saved) : { name: 'ক্যাম্প কমান্ডার', mobile: '01712345678' };
+  });
+  const [userPassword, setUserPassword] = useState(() => localStorage.getItem('army_user_pass_cache') || 'EPZArmy');
+  const [adminPassword, setAdminPassword] = useState(() => localStorage.getItem('army_admin_pass_cache') || 'admin123');
 
-  // UI Local Persistence (Session persist only)
+  // Session State
+  const [isLoggedIn, setIsLoggedIn] = useState(() => localStorage.getItem('app_is_logged_in') === 'true');
+  const [isAdminLoggedIn, setIsAdminLoggedIn] = useState(() => localStorage.getItem('app_is_admin_logged_in') === 'true');
+
   useEffect(() => {
     localStorage.setItem('app_is_logged_in', isLoggedIn.toString());
     localStorage.setItem('app_is_admin_logged_in', isAdminLoggedIn.toString());
@@ -79,8 +82,10 @@ const App: React.FC = () => {
   const [inputPassword, setInputPassword] = useState('');
   const [inputAdminPassword, setInputAdminPassword] = useState('');
   
-  // Define view state early as it's used in fetch effects
-  const [view, setView] = useState<ViewState>(() => (localStorage.getItem('app_is_admin_logged_in') === 'true') ? 'ADMIN' : 'HOME');
+  const [view, setView] = useState<ViewState>(() => {
+    const isAdmin = localStorage.getItem('app_is_admin_logged_in') === 'true';
+    return isAdmin ? 'ADMIN' : 'HOME';
+  });
   const [selectedCenter, setSelectedCenter] = useState<VotingCenter | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [error, setError] = useState('');
@@ -126,8 +131,10 @@ const App: React.FC = () => {
 
   // Cloud Sync Functions
   const pushToCloud = async (newData?: Partial<CloudData>) => {
+    // Only push if we have successfully synced at least once or are deliberately initializing
+    if (!hasInitialSync && !newData) return;
+
     setIsSyncing(true);
-    // Use the values from passed newData if available, otherwise fallback to current state
     const dataToPush: CloudData = {
       centers: newData?.centers ?? centers,
       emergencyContact: newData?.emergencyContact ?? emergencyContact,
@@ -139,50 +146,73 @@ const App: React.FC = () => {
     try {
       const response = await fetch(API_BASE, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
         body: JSON.stringify(dataToPush)
       });
       if (!response.ok) throw new Error("Sync Failed");
+      
       setLastUpdated(dataToPush.lastUpdated);
       setSyncError(null);
+      
+      // Update local cache
+      localStorage.setItem('army_centers_cache', JSON.stringify(dataToPush.centers));
+      localStorage.setItem('army_emergency_cache', JSON.stringify(dataToPush.emergencyContact));
+      localStorage.setItem('army_user_pass_cache', dataToPush.userPassword || '');
+      localStorage.setItem('army_admin_pass_cache', dataToPush.adminPassword || '');
     } catch (err) {
-      setSyncError("সিঙ্ক করা সম্ভব হয়নি");
+      console.error("Push failed:", err);
+      setSyncError("সার্ভারে ডাটা সংরক্ষণ করা সম্ভব হয়নি।");
     } finally {
       setIsSyncing(false);
     }
   };
 
-  const fetchFromCloud = async () => {
+  const fetchFromCloud = async (isManual = false) => {
     try {
-      const response = await fetch(API_BASE);
+      if (isManual) setIsSyncing(true);
+      const response = await fetch(API_BASE, {
+        headers: { 'Accept': 'application/json' }
+      });
       if (!response.ok) throw new Error("Fetch Failed");
       const data: CloudData = await response.json();
       
-      // Update local state if cloud data is newer
-      if (data.lastUpdated > lastUpdated) {
-        setCenters(data.centers);
-        setEmergencyContact(data.emergencyContact);
+      // If server is newer or it's our first successful sync
+      if (data.lastUpdated > lastUpdated || !hasInitialSync) {
+        if (data.centers) setCenters(data.centers);
+        if (data.emergencyContact) setEmergencyContact(data.emergencyContact);
         if (data.userPassword) setUserPassword(data.userPassword);
         if (data.adminPassword) setAdminPassword(data.adminPassword);
-        setLastUpdated(data.lastUpdated);
+        setLastUpdated(data.lastUpdated || Date.now());
+        setHasInitialSync(true);
+
+        // Update local cache
+        localStorage.setItem('army_centers_cache', JSON.stringify(data.centers));
+        localStorage.setItem('army_emergency_cache', JSON.stringify(data.emergencyContact));
+        localStorage.setItem('army_user_pass_cache', data.userPassword || '');
+        localStorage.setItem('army_admin_pass_cache', data.adminPassword || '');
       }
       setSyncError(null);
     } catch (err) {
       console.error("Cloud fetch error:", err);
+      if (isManual) setSyncError("সার্ভার থেকে তথ্য পাওয়া যায়নি।");
+    } finally {
+      if (isManual) setIsSyncing(false);
     }
   };
 
-  // Initial fetch and real-time polling (every 10 seconds)
+  // Polling
   useEffect(() => {
     fetchFromCloud();
     const interval = setInterval(() => {
-      // Don't poll while editing a center to avoid losing work due to a remote overwrite
-      if (view !== 'EDIT_CENTER') {
+      if (view !== 'EDIT_CENTER' && view !== 'SETTINGS') {
         fetchFromCloud();
       }
-    }, 10000); 
+    }, 15000); 
     return () => clearInterval(interval);
-  }, [view, lastUpdated]);
+  }, [view, lastUpdated, hasInitialSync]);
 
   // Load Google Maps script
   useEffect(() => {
@@ -190,7 +220,6 @@ const App: React.FC = () => {
     if (!existingScript) {
       const script = document.createElement('script');
       script.id = 'google-maps-script';
-      // In Vite, process.env isn't always available unless shimmed or handled by types
       const apiKey = (process.env as any).API_KEY || '';
       script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places`;
       script.async = true;
@@ -591,7 +620,7 @@ const App: React.FC = () => {
             <button onClick={toggleSidebar} className="p-2 hover:bg-white/10 rounded-full cursor-pointer"><XMarkIcon className="h-6 w-6 text-white" /></button>
           </div>
           <h2 className="text-2xl font-black mb-1">ইপিজেড আর্মি</h2>
-          <p className="text-[9px] opacity-80 font-black uppercase tracking-widest">Central Database v5.0</p>
+          <p className="text-[9px] opacity-80 font-black uppercase tracking-widest">Central Database v5.1</p>
         </div>
 
         <nav className="p-4 space-y-1">
@@ -671,13 +700,13 @@ const App: React.FC = () => {
                 <p className="text-[10px] font-black text-black uppercase">মোট সদস্য</p>
                 <p className="text-3xl font-black text-black">{toBengaliDigits(stats.totalPersonnel)}</p>
               </div>
-              <button onClick={() => pushToCloud()} className={`bg-white p-4 rounded-2xl shadow-sm border border-emerald-200 flex items-center justify-between group active:scale-95 transition-all cursor-pointer ${isSyncing ? 'animate-pulse' : ''}`}>
-                <span className="text-sm font-black text-emerald-800">ফোর্স সিঙ্ক</span>
+              <button onClick={() => fetchFromCloud(true)} className={`bg-white p-4 rounded-2xl shadow-sm border border-emerald-200 flex items-center justify-between group active:scale-95 transition-all cursor-pointer ${isSyncing ? 'animate-pulse' : ''}`}>
+                <span className="text-sm font-black text-emerald-800">রিফ্রেশ ডাটা</span>
                 <CloudArrowUpIcon className="h-6 w-6 text-emerald-500 group-hover:text-emerald-800 transition-colors" />
               </button>
             </div>
             <div className="bg-white p-6 rounded-3xl shadow-sm border border-red-200 space-y-4">
-              <h2 className="text-lg font-black text-black flex items-center gap-3"><MegaphoneIcon className="h-6 w-6 text-red-600" />জরুরী যোগাযোগ সেটিংস (সবার জন্য আপডেট হবে)</h2>
+              <h2 className="text-lg font-black text-black flex items-center gap-3"><MegaphoneIcon className="h-6 w-6 text-red-600" />জরুরী যোগাযোগ সেটিংস</h2>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <input type="text" placeholder="দায়িত্বপ্রাপ্তর নাম" className="w-full px-4 py-2 rounded-xl bg-slate-50 border-2 border-gray-300 font-bold" value={tempEmergency.name} onChange={e => setTempEmergency({...tempEmergency, name: e.target.value})} />
                 <input type="text" placeholder="মোবাইল নম্বর" className="w-full px-4 py-2 rounded-xl bg-slate-50 border-2 border-gray-300 font-bold" value={tempEmergency.mobile} onChange={e => setTempEmergency({...tempEmergency, mobile: e.target.value})} />
@@ -688,7 +717,7 @@ const App: React.FC = () => {
               <h2 className="text-xl font-black text-black">কেন্দ্র ব্যবস্থাপনা</h2>
               <button onClick={() => startEdit()} className="bg-army-green text-white px-6 py-3 rounded-xl font-black flex items-center justify-center gap-2 shadow-lg active:scale-95 transition-all cursor-pointer"><PlusIcon className="h-5 w-5" /> নতুন কেন্দ্র যোগ করুন</button>
             </div>
-            <div className="bg-white rounded-3xl shadow-sm overflow-hidden border border-slate-300">
+            <div className="bg-white rounded-3xl shadow-sm overflow-x-auto border border-slate-300">
               <table className="w-full text-left text-sm min-w-[500px]">
                 <thead className="bg-slate-50 border-b border-slate-300">
                   <tr className="text-black">
@@ -721,7 +750,7 @@ const App: React.FC = () => {
             <div className="bg-white p-8 rounded-3xl shadow-xl border-t-8 border-blue-600 space-y-8">
               <h2 className="text-xl font-black mb-6 flex items-center gap-3 text-black">
                 <KeyIcon className="h-6 w-6 text-blue-600" />
-                পাসওয়ার্ড পরিবর্তন (ক্লাউড সিঙ্ক হবে)
+                পাসওয়ার্ড পরিবর্তন
               </h2>
               
               <div className="space-y-6">
