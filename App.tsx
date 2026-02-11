@@ -127,11 +127,12 @@ const App: React.FC = () => {
   // Cloud Sync Functions
   const pushToCloud = async (newData?: Partial<CloudData>) => {
     setIsSyncing(true);
+    // Use the values from passed newData if available, otherwise fallback to current state
     const dataToPush: CloudData = {
-      centers: newData?.centers || centers,
-      emergencyContact: newData?.emergencyContact || emergencyContact,
-      userPassword: newData?.userPassword || userPassword,
-      adminPassword: newData?.adminPassword || adminPassword,
+      centers: newData?.centers ?? centers,
+      emergencyContact: newData?.emergencyContact ?? emergencyContact,
+      userPassword: newData?.userPassword ?? userPassword,
+      adminPassword: newData?.adminPassword ?? adminPassword,
       lastUpdated: Date.now()
     };
 
@@ -189,7 +190,9 @@ const App: React.FC = () => {
     if (!existingScript) {
       const script = document.createElement('script');
       script.id = 'google-maps-script';
-      script.src = `https://maps.googleapis.com/maps/api/js?key=${process.env.API_KEY || ''}&libraries=places`;
+      // In Vite, process.env isn't always available unless shimmed or handled by types
+      const apiKey = (process.env as any).API_KEY || '';
+      script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places`;
       script.async = true;
       script.defer = true;
       document.head.appendChild(script);
@@ -597,7 +600,7 @@ const App: React.FC = () => {
           </button>
           <div className="border-t border-gray-100 my-4 pt-4">
             <p className="px-4 text-[9px] uppercase font-black text-black tracking-widest mb-2">প্রশাসন</p>
-            <button onClick={() => { isAdminLoggedIn ? setView('ADMIN') : setView('ADMIN_LOGIN'); setIsSidebarOpen(false); }} className={`flex items-center gap-4 w-full p-4 rounded-xl transition-all cursor-pointer ${view === 'ADMIN' ? 'bg-orange-600 text-white font-black' : 'text-black hover:bg-gray-100 font-bold'}`}>
+            <button onClick={() => { isAdminLoggedIn ? setView('ADMIN') : setView('ADMIN_LOGIN'); setIsSidebarOpen(false); }} className={`flex items-center gap-4 w-full p-4 rounded-xl transition-all cursor-pointer ${(view === 'ADMIN' || view === 'ADMIN_LOGIN') ? 'bg-orange-600 text-white font-black' : 'text-black hover:bg-gray-100 font-bold'}`}>
               <Cog6ToothIcon className="h-5 w-5" /><span className="text-sm">অ্যাডমিন প্যানেল</span>
             </button>
           </div>
@@ -740,8 +743,9 @@ const App: React.FC = () => {
                           showModal({ title: 'ত্রুটি', message: 'পাসওয়ার্ড প্রদান করুন!', type: 'WARNING' });
                           return;
                         }
-                        setUserPassword(newUserPassword);
-                        await pushToCloud({ userPassword: newUserPassword });
+                        const newPass = newUserPassword;
+                        setUserPassword(newPass);
+                        await pushToCloud({ userPassword: newPass });
                         setNewUserPassword('');
                         showModal({ title: 'সাফল্য', message: 'ইউজার পাসওয়ার্ড কেন্দ্রীয়ভাবে পরিবর্তিত হয়েছে!', type: 'SUCCESS' });
                       }}
@@ -770,8 +774,9 @@ const App: React.FC = () => {
                           showModal({ title: 'ত্রুটি', message: 'পিন প্রদান করুন!', type: 'WARNING' });
                           return;
                         }
-                        setAdminPassword(newAdminPassword);
-                        await pushToCloud({ adminPassword: newAdminPassword });
+                        const newPass = newAdminPassword;
+                        setAdminPassword(newPass);
+                        await pushToCloud({ adminPassword: newPass });
                         setNewAdminPassword('');
                         showModal({ title: 'সাফল্য', message: 'অ্যাডমিন পিন কেন্দ্রীয়ভাবে পরিবর্তিত হয়েছে!', type: 'SUCCESS' });
                       }}
