@@ -27,7 +27,9 @@ import {
   CheckCircleIcon, 
   MapIcon, 
   ArrowRightOnRectangleIcon, 
-  CloudArrowUpIcon 
+  CloudArrowUpIcon,
+  ArrowUpTrayIcon,
+  ArrowDownTrayIcon
 } from '@heroicons/react/24/solid';
 
 // Helper to convert English digits to Bengali digits
@@ -37,6 +39,8 @@ const toBengaliDigits = (num: string | number) => {
 };
 
 // Centralized Sync Configuration
+// Note: If this blob ID is invalid or read-only, cloud sync will fail. 
+// We rely on localStorage as a primary backup.
 const API_BASE = "https://jsonblob.com/api/jsonBlob/1344265780516626432"; 
 
 interface CustomModalProps {
@@ -53,12 +57,12 @@ interface CustomModalProps {
 
 const App: React.FC = () => {
   // Sync State
-  const [lastUpdated, setLastUpdated] = useState<number>(0);
+  const [lastUpdated, setLastUpdated] = useState<number>(() => Number(localStorage.getItem('army_last_updated')) || 0);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [hasInitialSync, setHasInitialSync] = useState<boolean>(false);
 
-  // Core App Data State
+  // Core App Data State - Initialized from local cache
   const [centers, setCenters] = useState<VotingCenter[]>(() => {
     const saved = localStorage.getItem('army_centers_cache');
     return saved ? JSON.parse(saved) : initialCenters;
@@ -131,17 +135,23 @@ const App: React.FC = () => {
 
   // Cloud Sync Functions
   const pushToCloud = async (newData?: Partial<CloudData>) => {
-    // Only push if we have successfully synced at least once or are deliberately initializing
-    if (!hasInitialSync && !newData) return;
-
     setIsSyncing(true);
+    const timestamp = Date.now();
     const dataToPush: CloudData = {
       centers: newData?.centers ?? centers,
       emergencyContact: newData?.emergencyContact ?? emergencyContact,
       userPassword: newData?.userPassword ?? userPassword,
       adminPassword: newData?.adminPassword ?? adminPassword,
-      lastUpdated: Date.now()
+      lastUpdated: timestamp
     };
+
+    // First save to LocalStorage to ensure we don't lose data if cloud fails
+    localStorage.setItem('army_centers_cache', JSON.stringify(dataToPush.centers));
+    localStorage.setItem('army_emergency_cache', JSON.stringify(dataToPush.emergencyContact));
+    localStorage.setItem('army_user_pass_cache', dataToPush.userPassword || '');
+    localStorage.setItem('army_admin_pass_cache', dataToPush.adminPassword || '');
+    localStorage.setItem('army_last_updated', timestamp.toString());
+    setLastUpdated(timestamp);
 
     try {
       const response = await fetch(API_BASE, {
@@ -153,18 +163,10 @@ const App: React.FC = () => {
         body: JSON.stringify(dataToPush)
       });
       if (!response.ok) throw new Error("Sync Failed");
-      
-      setLastUpdated(dataToPush.lastUpdated);
       setSyncError(null);
-      
-      // Update local cache
-      localStorage.setItem('army_centers_cache', JSON.stringify(dataToPush.centers));
-      localStorage.setItem('army_emergency_cache', JSON.stringify(dataToPush.emergencyContact));
-      localStorage.setItem('army_user_pass_cache', dataToPush.userPassword || '');
-      localStorage.setItem('army_admin_pass_cache', dataToPush.adminPassword || '');
     } catch (err) {
       console.error("Push failed:", err);
-      setSyncError("সার্ভারে ডাটা সংরক্ষণ করা সম্ভব হয়নি।");
+      setSyncError("ক্লাউড সিঙ্ক ব্যর্থ। ডাটা বর্তমানে শুধুমাত্র আপনার ব্রাউজারে সংরক্ষিত আছে।");
     } finally {
       setIsSyncing(false);
     }
@@ -179,38 +181,47 @@ const App: React.FC = () => {
       if (!response.ok) throw new Error("Fetch Failed");
       const data: CloudData = await response.json();
       
-      // If server is newer or it's our first successful sync
+      // Update local state if cloud data is newer or if we've never synced
       if (data.lastUpdated > lastUpdated || !hasInitialSync) {
-        if (data.centers) setCenters(data.centers);
-        if (data.emergencyContact) setEmergencyContact(data.emergencyContact);
-        if (data.userPassword) setUserPassword(data.userPassword);
-        if (data.adminPassword) setAdminPassword(data.adminPassword);
-        setLastUpdated(data.lastUpdated || Date.now());
+        if (data.centers) {
+            setCenters(data.centers);
+            localStorage.setItem('army_centers_cache', JSON.stringify(data.centers));
+        }
+        if (data.emergencyContact) {
+            setEmergencyContact(data.emergencyContact);
+            localStorage.setItem('army_emergency_cache', JSON.stringify(data.emergencyContact));
+        }
+        if (data.userPassword) {
+            setUserPassword(data.userPassword);
+            localStorage.setItem('army_user_pass_cache', data.userPassword);
+        }
+        if (data.adminPassword) {
+            setAdminPassword(data.adminPassword);
+            localStorage.setItem('army_admin_pass_cache', data.adminPassword);
+        }
+        const newTime = data.lastUpdated || Date.now();
+        setLastUpdated(newTime);
+        localStorage.setItem('army_last_updated', newTime.toString());
         setHasInitialSync(true);
-
-        // Update local cache
-        localStorage.setItem('army_centers_cache', JSON.stringify(data.centers));
-        localStorage.setItem('army_emergency_cache', JSON.stringify(data.emergencyContact));
-        localStorage.setItem('army_user_pass_cache', data.userPassword || '');
-        localStorage.setItem('army_admin_pass_cache', data.adminPassword || '');
       }
       setSyncError(null);
     } catch (err) {
       console.error("Cloud fetch error:", err);
-      if (isManual) setSyncError("সার্ভার থেকে তথ্য পাওয়া যায়নি।");
+      if (isManual) setSyncError("সার্ভার থেকে ডাটা পাওয়া যায়নি।");
     } finally {
       if (isManual) setIsSyncing(false);
     }
   };
 
-  // Polling
+  // Polling for updates
   useEffect(() => {
     fetchFromCloud();
     const interval = setInterval(() => {
+      // Don't poll while editing to avoid remote overwrites
       if (view !== 'EDIT_CENTER' && view !== 'SETTINGS') {
         fetchFromCloud();
       }
-    }, 15000); 
+    }, 20000); 
     return () => clearInterval(interval);
   }, [view, lastUpdated, hasInitialSync]);
 
@@ -220,7 +231,8 @@ const App: React.FC = () => {
     if (!existingScript) {
       const script = document.createElement('script');
       script.id = 'google-maps-script';
-      const apiKey = (process.env as any).API_KEY || '';
+      // Fallback API key check
+      const apiKey = (window as any).process?.env?.API_KEY || (import.meta as any).env?.VITE_API_KEY || '';
       script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places`;
       script.async = true;
       script.defer = true;
@@ -392,7 +404,7 @@ const App: React.FC = () => {
     
     showModal({
       title: 'সফলভাবে সংরক্ষিত',
-      message: 'কেন্দ্রের তথ্য সফলভাবে কেন্দ্রীয় ডাটাবেসে আপডেট করা হয়েছে।',
+      message: 'কেন্দ্রের তথ্য সফলভাবে ডাটাবেসে আপডেট করা হয়েছে।',
       type: 'SUCCESS'
     });
     setView('ADMIN');
@@ -488,7 +500,7 @@ const App: React.FC = () => {
     await pushToCloud({ emergencyContact: tempEmergency });
     showModal({
       title: 'আপডেট সফল',
-      message: 'জরুরী যোগাযোগ নম্বর সফলভাবে কেন্দ্রীয় ডাটাবেসে সেভ হয়েছে!',
+      message: 'জরুরী যোগাযোগ নম্বর সফলভাবে ডাটাবেসে সেভ হয়েছে!',
       type: 'SUCCESS'
     });
   };
@@ -498,6 +510,48 @@ const App: React.FC = () => {
       setTempEmergency(emergencyContact);
     }
   }, [view, emergencyContact]);
+
+  const exportData = () => {
+    const data: CloudData = { centers, emergencyContact, userPassword, adminPassword, lastUpdated };
+    const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `EPZ_ARMY_BACKUP_${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    showModal({ title: 'রপ্তানি সফল', message: 'আপনার ডাটাবেস ফাইলটি ডাউনলোড হয়েছে। এটি সুরক্ষিত স্থানে রাখুন।', type: 'SUCCESS' });
+  };
+
+  const importData = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+        try {
+            const data: CloudData = JSON.parse(event.target?.result as string);
+            if (data.centers && data.emergencyContact) {
+                setCenters(data.centers);
+                setEmergencyContact(data.emergencyContact);
+                if (data.userPassword) setUserPassword(data.userPassword);
+                if (data.adminPassword) setAdminPassword(data.adminPassword);
+                const timestamp = Date.now();
+                setLastUpdated(timestamp);
+                await pushToCloud({ 
+                    centers: data.centers, 
+                    emergencyContact: data.emergencyContact,
+                    userPassword: data.userPassword,
+                    adminPassword: data.adminPassword
+                });
+                showModal({ title: 'আমদানি সফল', message: 'ডাটাবেস সফলভাবে আমদানি এবং সিঙ্ক করা হয়েছে!', type: 'SUCCESS' });
+            }
+        } catch (err) {
+            showModal({ title: 'ত্রুটি', message: 'ফাইলটি সঠিক ফরম্যাটে নেই।', type: 'DANGER' });
+        }
+    };
+    reader.readAsText(file);
+  };
 
   const ModalPortal = () => {
     if (!modal.isOpen) return null;
@@ -517,7 +571,10 @@ const App: React.FC = () => {
             <p className="text-gray-800 font-bold text-sm leading-relaxed mb-8">{modal.message}</p>
             <div className="flex flex-col gap-3">
               <button 
-                onClick={modal.onConfirm || modal.onClose}
+                onClick={() => {
+                  if (modal.onConfirm) modal.onConfirm();
+                  else modal.onClose();
+                }}
                 className={`w-full py-4 rounded-2xl font-black text-white shadow-lg active:scale-95 transition-all ${
                   modal.type === 'DANGER' ? 'bg-red-600' : 
                   modal.type === 'SUCCESS' ? 'bg-emerald-600' :
@@ -620,7 +677,7 @@ const App: React.FC = () => {
             <button onClick={toggleSidebar} className="p-2 hover:bg-white/10 rounded-full cursor-pointer"><XMarkIcon className="h-6 w-6 text-white" /></button>
           </div>
           <h2 className="text-2xl font-black mb-1">ইপিজেড আর্মি</h2>
-          <p className="text-[9px] opacity-80 font-black uppercase tracking-widest">Central Database v5.1</p>
+          <p className="text-[9px] opacity-80 font-black uppercase tracking-widest">Central Database v5.2</p>
         </div>
 
         <nav className="p-4 space-y-1">
@@ -656,6 +713,12 @@ const App: React.FC = () => {
         </div>
         <button onClick={() => setShowSOS(true)} className="p-2.5 bg-red-600 text-white rounded-xl shadow-md border border-red-500 flex-shrink-0 active:scale-95 cursor-pointer"><MegaphoneIcon className="h-5 w-5" /></button>
       </header>
+
+      {syncError && (
+        <div className="bg-red-100 border-b border-red-200 text-red-700 px-4 py-2 text-[10px] font-bold text-center animate-fadeInFast">
+          {syncError} <button onClick={() => fetchFromCloud(true)} className="underline ml-2">আবার চেষ্টা করুন</button>
+        </div>
+      )}
 
       <main className="flex-1 max-w-6xl mx-auto w-full p-4 md:p-8 overflow-y-auto">
         {view === 'HOME' && (
@@ -717,36 +780,38 @@ const App: React.FC = () => {
               <h2 className="text-xl font-black text-black">কেন্দ্র ব্যবস্থাপনা</h2>
               <button onClick={() => startEdit()} className="bg-army-green text-white px-6 py-3 rounded-xl font-black flex items-center justify-center gap-2 shadow-lg active:scale-95 transition-all cursor-pointer"><PlusIcon className="h-5 w-5" /> নতুন কেন্দ্র যোগ করুন</button>
             </div>
-            <div className="bg-white rounded-3xl shadow-sm overflow-x-auto border border-slate-300">
-              <table className="w-full text-left text-sm min-w-[500px]">
-                <thead className="bg-slate-50 border-b border-slate-300">
-                  <tr className="text-black">
-                    <th className="px-6 py-4 font-black uppercase text-[10px] w-20">নং</th>
-                    <th className="px-6 py-4 font-black uppercase text-[10px]">কেন্দ্রের নাম</th>
-                    <th className="px-6 py-4 font-black uppercase text-[10px] text-right">অ্যাকশন</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-200 text-black">
-                  {centers.map(c => (
-                    <tr key={c.id} className="hover:bg-slate-50 transition-colors">
-                      <td className="px-6 py-4 font-black text-army-green text-base">{c.centerNumber}</td>
-                      <td className="px-6 py-4 font-bold">{c.name}</td>
-                      <td className="px-6 py-4 text-right">
-                        <div className="flex justify-end gap-2">
-                          <button onClick={() => startEdit(c)} className="p-2 text-blue-800 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors cursor-pointer border border-blue-200"><PencilSquareIcon className="h-5 w-5" /></button>
-                          <button onClick={() => deleteCenter(c.id)} className="p-2 text-red-700 bg-red-50 rounded-lg hover:bg-red-100 transition-colors cursor-pointer border border-red-200"><TrashIcon className="h-5 w-5" /></button>
-                        </div>
-                      </td>
+            <div className="bg-white rounded-3xl shadow-sm overflow-hidden border border-slate-300">
+              <div className="overflow-x-auto w-full">
+                <table className="w-full text-left text-sm min-w-[600px] border-collapse">
+                  <thead className="bg-slate-50 border-b border-slate-300">
+                    <tr className="text-black">
+                      <th className="px-6 py-4 font-black uppercase text-[10px] w-20">নং</th>
+                      <th className="px-6 py-4 font-black uppercase text-[10px]">কেন্দ্রের নাম</th>
+                      <th className="px-6 py-4 font-black uppercase text-[10px] text-right">অ্যাকশন</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 text-black">
+                    {centers.map(c => (
+                      <tr key={c.id} className="hover:bg-slate-50 transition-colors">
+                        <td className="px-6 py-4 font-black text-army-green text-base">{c.centerNumber}</td>
+                        <td className="px-6 py-4 font-bold">{c.name}</td>
+                        <td className="px-6 py-4 text-right">
+                          <div className="flex justify-end gap-2">
+                            <button onClick={() => startEdit(c)} className="p-2 text-blue-800 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors cursor-pointer border border-blue-200"><PencilSquareIcon className="h-5 w-5" /></button>
+                            <button onClick={() => deleteCenter(c.id)} className="p-2 text-red-700 bg-red-50 rounded-lg hover:bg-red-100 transition-colors cursor-pointer border border-red-200"><TrashIcon className="h-5 w-5" /></button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         )}
 
         {view === 'SETTINGS' && (
-          <div className="max-w-md mx-auto animate-fadeIn">
+          <div className="max-w-md mx-auto animate-fadeIn space-y-6 pb-12">
             <div className="bg-white p-8 rounded-3xl shadow-xl border-t-8 border-blue-600 space-y-8">
               <h2 className="text-xl font-black mb-6 flex items-center gap-3 text-black">
                 <KeyIcon className="h-6 w-6 text-blue-600" />
@@ -768,15 +833,12 @@ const App: React.FC = () => {
                     />
                     <button 
                       onClick={async () => {
-                        if (!newUserPassword) {
-                          showModal({ title: 'ত্রুটি', message: 'পাসওয়ার্ড প্রদান করুন!', type: 'WARNING' });
-                          return;
-                        }
+                        if (!newUserPassword) return;
                         const newPass = newUserPassword;
                         setUserPassword(newPass);
                         await pushToCloud({ userPassword: newPass });
                         setNewUserPassword('');
-                        showModal({ title: 'সাফল্য', message: 'ইউজার পাসওয়ার্ড কেন্দ্রীয়ভাবে পরিবর্তিত হয়েছে!', type: 'SUCCESS' });
+                        showModal({ title: 'সাফল্য', message: 'ইউজার পাসওয়ার্ড পরিবর্তিত হয়েছে!', type: 'SUCCESS' });
                       }}
                       className="w-full py-3 bg-army-green text-white rounded-xl font-black shadow-md active:scale-95 transition-all cursor-pointer"
                     >
@@ -799,15 +861,12 @@ const App: React.FC = () => {
                     />
                     <button 
                       onClick={async () => {
-                        if (!newAdminPassword) {
-                          showModal({ title: 'ত্রুটি', message: 'পিন প্রদান করুন!', type: 'WARNING' });
-                          return;
-                        }
+                        if (!newAdminPassword) return;
                         const newPass = newAdminPassword;
                         setAdminPassword(newPass);
                         await pushToCloud({ adminPassword: newPass });
                         setNewAdminPassword('');
-                        showModal({ title: 'সাফল্য', message: 'অ্যাডমিন পিন কেন্দ্রীয়ভাবে পরিবর্তিত হয়েছে!', type: 'SUCCESS' });
+                        showModal({ title: 'সাফল্য', message: 'অ্যাডমিন পিন পরিবর্তিত হয়েছে!', type: 'SUCCESS' });
                       }}
                       className="w-full py-3 bg-orange-600 text-white rounded-xl font-black shadow-md active:scale-95 transition-all cursor-pointer"
                     >
@@ -815,10 +874,28 @@ const App: React.FC = () => {
                     </button>
                   </div>
                 </div>
-
-                <button onClick={goHome} className="w-full py-3 bg-slate-200 text-black rounded-xl font-black active:scale-95 cursor-pointer">ফিরে যান</button>
               </div>
             </div>
+
+            {/* Robust Persistence Alternative */}
+            <div className="bg-white p-8 rounded-3xl shadow-xl border-t-8 border-slate-600 space-y-6">
+               <h2 className="text-xl font-black text-black flex items-center gap-3">
+                 <ShieldCheckIcon className="h-6 w-6 text-slate-600" />
+                 বিকল্প ব্যাকআপ সিস্টেম
+               </h2>
+               <p className="text-xs font-bold text-gray-700">ক্লাউড সিঙ্ক কাজ না করলে আপনি আপনার ডাটাবেস ম্যানুয়ালি ব্যাকআপ নিতে পারেন এবং অন্য ফোনে আমদানি করতে পারেন।</p>
+               <div className="grid grid-cols-1 gap-4">
+                  <button onClick={exportData} className="flex items-center justify-center gap-3 w-full py-4 bg-slate-800 text-white rounded-2xl font-black active:scale-95 transition-all cursor-pointer">
+                    <ArrowDownTrayIcon className="h-5 w-5" /> ডাটা এক্সপোর্ট করুন
+                  </button>
+                  <label className="flex items-center justify-center gap-3 w-full py-4 bg-slate-200 text-black rounded-2xl font-black active:scale-95 transition-all cursor-pointer text-center">
+                    <ArrowUpTrayIcon className="h-5 w-5" /> ডাটা ইমপোর্ট করুন
+                    <input type="file" accept=".json" onChange={importData} className="hidden" />
+                  </label>
+               </div>
+            </div>
+            
+            <button onClick={goHome} className="w-full py-4 bg-slate-100 text-black rounded-2xl font-black active:scale-95 cursor-pointer shadow-md">ফিরে যান</button>
           </div>
         )}
 
@@ -966,6 +1043,11 @@ const App: React.FC = () => {
         body { -webkit-tap-highlight-color: transparent; }
         * { box-sizing: border-box; }
         input::placeholder { font-weight: 700; color: #475569; opacity: 1; }
+        /* Table scroll support */
+        .overflow-x-auto {
+            -webkit-overflow-scrolling: touch;
+            scrollbar-width: thin;
+        }
       `}</style>
     </div>
   );
